@@ -1,14 +1,39 @@
 # blessings is a library to handle terminal escape codes
 # documentation for it at http://pythonhosted.org/blessings/
-from blessed import Terminal 
+import blessed
 import game
 import logging
 
+# Set up logging configuration. Logs will be sent to the file 'game.log'
 logging.basicConfig(filename="game.log", filemode="w", level=logging.DEBUG)
 
-t = Terminal()
-print t.enter_fullscreen
+# We override Blessed's default Terminal class to add the draw_square function, allowing our game objects to draw to the screen.
+# This interface helps to decouple our code from the Blessed code.
+class PongTerminal(blessed.Terminal):
+    def draw_square(self, x, y, colour=""):
+        self.stream.write(self.move(int(y), int(x)))
+        
+        try:
+            self.stream.flush()
+        except e:
+            logging.error("Terminal could not flush stream!")
 
-game = game.Game(t, score_needed_to_win=5)
+        # Check to see if the new colour is different to the last colour.
+        # This minimizes the number of colour changes needed.
+        if self.previous_square_colour != colour:
+            if colour == "":
+                print(self.normal + " ")
+            else:
+                print(colour + " ")
+
+            self.previous_square_colour = colour
+        else:
+            print(" ")
+
+t = PongTerminal()
+print t.enter_fullscreen
+print t.clear
+
 logging.info("main: Starting game")
-game.play()
+game = game.Game(score_needed_to_win=5)
+game.play(t)
