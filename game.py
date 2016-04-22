@@ -5,6 +5,7 @@ import Queue
 import threading
 import logging
 import math
+import datetime
 
 def keyboard_input_worker(terminal, queue):
     t = terminal
@@ -36,6 +37,7 @@ class Game:
 
         self.keyboard_input_thread = None
         self.keyboard_input_queue  = None
+        self.starting_next_round = False
 
     def init_keyboard_input_thread(self, terminal):
         # This queue is used for communication between the keyboard input thread and the main thread
@@ -51,18 +53,27 @@ class Game:
     def play(self, terminal):
         self.init_keyboard_input_thread(terminal)
 
-        self.reset_round(terminal) # move all objects to their default positions
-
         with terminal.hidden_cursor(): # without this the terminal cursor flashes which looks bad
+            self.reset_round(terminal)
+
             while True:
-                self.draw(terminal)
+                # Time the duration of the frame and adjust the sleep duration accordingly.
+                # This improves smoothness on the Pi.
+                frame_start_time = datetime.datetime.now()
 
                 # Note handle_input must come before update
                 self.handle_input()
                 self.update(terminal)
+                self.redraw(terminal)
 
-                time.sleep(1 / float(self.fps))
-                print terminal.clear
+                frame_end_time = datetime.datetime.now()
+                time_delta = (frame_end_time - frame_start_time).total_seconds()
+                time.sleep(max(0, 1/float(self.fps) - time_delta))
+
+                if self.starting_next_round:
+                    self.next_round(terminal)
+
+                #print terminal.clear
 
     def handle_input(self):
         try:
@@ -72,9 +83,9 @@ class Game:
                 self.paddle1.vy = -1
             elif key == "s":
                 self.paddle1.vy = 1
-            elif key == "KEY_UP":
+            elif key == "o":
                 self.paddle2.vy = -1
-            elif key == "KEY_DOWN":
+            elif key == "l":
                 self.paddle2.vy = 1
             elif key == "p":
                 # TODO: pause game
@@ -86,6 +97,11 @@ class Game:
         logging.info("game: Drawing")
         for object in self.game_objects:
             object.draw(terminal)
+
+    def redraw(self, terminal):
+        logging.info("game: Redrawing")
+        for object in self.game_objects:
+            object.redraw(terminal)
 
     def update(self, terminal):
         logging.info("game: Updating")
@@ -111,11 +127,11 @@ class Game:
         if b.x < 0: # player 1 missed
             logging.info("game: Player 2 scores")
             self.paddle2.score += 1
-            self.next_round(t)
+            self.starting_next_round = True
         elif b.x > t.width-1: # player 2 missed
             logging.info("game: Player 1 scores")
             self.paddle1.score += 1
-            self.next_round(t)
+            self.starting_next_round = True
 
         # Now check if ball hit paddles
         for paddle in [self.paddle1, self.paddle2]:
@@ -127,13 +143,15 @@ class Game:
         for paddle in [self.paddle1, self.paddle2]:
             if paddle.y < y_min:
                 paddle.y = y_min
-            elif paddle.y > y_max:
-                paddle.y = y_max
+            elif paddle.y + paddle.height >= y_max:
+                paddle.y = y_max - paddle.height
 
     def reset_round(self, terminal):
         logging.info("game: Resetting round")
-        for object in [self.ball, self.paddle1, self.paddle2]:
+        print terminal.clear
+        for object in self.game_objects:
             object.reset(terminal)
+            object.draw(terminal)
 
     def next_round(self, terminal):
         """
@@ -142,6 +160,7 @@ class Game:
         logging.info("game: Moving to next round")
         time.sleep(0.75)
         self.reset_round(terminal)
+        self.starting_next_round = False
 
     def game_over(self):
         # TODO
@@ -152,6 +171,9 @@ class Game:
 
 class Ball:
     def __init__(self):
+        # Keep a note of the previous position to help when redrawing
+        self.prev_x = None
+        self.prev_y = None
         self.x = 0
         self.y = 0
         self.vx = 0
@@ -166,6 +188,9 @@ class Ball:
         """
         logging.debug("ball: Ball reset")
         self.colour = terminal.on_green
+
+        self.prev_x = None
+        self.prev_y = None
         self.x = terminal.width/2.0
         self.y = terminal.height/2.0
 
@@ -179,12 +204,18 @@ class Ball:
         logging.debug("ball: Ball draw")
         terminal.draw_square(int(self.x), int(self.y), colour=self.colour)
     
-    def undraw(self, terminal):
-        logging.debug("ball: Ball undraw")
-        terminal.draw_square(int(self.x), int(self.y))
+    def redraw(self, terminal):
+        logging.debug("ball: Ball redraw")
+        # First remove the old ball
+        terminal.draw_square(int(self.prev_x), int(self.prev_y))
+        # Now draw the new one
+        terminal.draw_square(int(self.x), int(self.y), colour=self.colour)
 
     def update(self, terminal):
         logging.debug("ball: Ball updated. x={0}, y={1}, vx={2}, vy={3}".format(self.x, self.y, self.vx, self.vy))
+        self.prev_x = self.x
+        self.prev_y = self.y
+
         self.x += self.vx
         self.y += self.vy
 
@@ -212,6 +243,9 @@ class Paddle:
         self.offset = 1 # how far from the sides of the screen the paddle should be
         self.speed = 0.2 # how quickly the paddle will move up or down
         self.score = 0 # score in points. 1 goal = 1 point
+
+        self.prev_x = None
+        self.prev_y = None
         self.y = 0 # the y position refers to the top of the paddle
         self.x = 0
         self.vy = 0.0 # velocity in the y direction
@@ -235,6 +269,9 @@ class Paddle:
         else: # self.id == "player2"
             self.x = terminal.width - 1 - self.offset
 
+        self.prev_x = None
+        self.prev_y = None
+
         self.vy = 0
 
     def draw(self, terminal):
@@ -242,7 +279,19 @@ class Paddle:
         for y in range(0, self.height):
             terminal.draw_square(int(self.x), int(self.y + y), colour=self.colour)
 
+    def redraw(self, terminal):
+        # Only redraw if the paddle moved
+        if self.prev_x != self.x or self.prev_y != self.y:
+            for y in range(0, self.height):
+                terminal.draw_square(int(self.prev_x), int(self.prev_y + y))
+
+            for y in range(0, self.height):
+                terminal.draw_square(int(self.x), int(self.y + y), colour=self.colour)
+
     def update(self, terminal):
+        self.prev_x = self.x
+        self.prev_y = self.y
+
         self.y += self.vy
         self.vy = 0
 
@@ -278,18 +327,18 @@ class UserInterface:
         self.y_min = 2 # these values are changed during update
         self.y_max = 10
 
+    def reset(self, terminal):
+        pass
+
     def draw(self, terminal):
+        logging.debug("UI: UI draw")
         # Line across top
         print terminal.normal
         with terminal.location(0, 1):
             print terminal.white + u"\u2500" * terminal.width
 
         # Line down middle:
-        for y in range(2, terminal.height-1):
-            if y % 2 != 0:
-                # \u2502 is vertical line character
-                with terminal.location(terminal.width/2, y):
-                    print terminal.white + u"\u2502"
+        self.draw_centre_line(terminal)
 
         # Pong text:
         with terminal.location(terminal.width/2 - 2, 0):
@@ -303,9 +352,25 @@ class UserInterface:
         with terminal.location(terminal.width - 1 - len(str(self.paddle2.score)), 0):
             print terminal.red + str(self.paddle2.score)
 
+    def redraw(self, terminal):
+        """
+        Just redraw the centre line incase the ball passed over it.
+        """
+        logging.debug("UI: UI redraw")
+        self.draw_centre_line(terminal)
+
+    def draw_centre_line(self, terminal):
+        print terminal.normal + terminal.white
+        for y in range(2, terminal.height-1):
+            if y % 2 != 0:
+                # \u2502 is vertical line character
+                with terminal.location(terminal.width/2, y):
+                    print u"\u2502"
+
     def update(self, terminal):
+        logging.debug("UI: UI update")
         self.y_min = 2
-        self.y_max = terminal.height - 1
+        self.y_max = terminal.height - 3
 
     def get_y_min(self):
         """
