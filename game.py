@@ -56,6 +56,8 @@ class Game:
         with terminal.hidden_cursor(): # without this the terminal cursor flashes which looks bad
             while True:
                 self.draw(terminal)
+
+                # Note handle_input must come before update
                 self.handle_input()
                 self.update(terminal)
 
@@ -67,13 +69,13 @@ class Game:
             key = self.keyboard_input_queue.get_nowait()
 
             if key == "w":
-                self.paddle1.y -= 1
+                self.paddle1.vy = -1
             elif key == "s":
-                self.paddle1.y += 1
+                self.paddle1.vy = 1
             elif key == "KEY_UP":
-                self.paddle2.y -= 1
+                self.paddle2.vy = -1
             elif key == "KEY_DOWN":
-                self.paddle2.y += 1
+                self.paddle2.vy = 1
             elif key == "p":
                 # TODO: pause game
                 pass
@@ -97,11 +99,11 @@ class Game:
         y_min = self.user_interface.get_y_min()
         y_max = self.user_interface.get_y_max()
 
-        if b.y < y_min: 
+        if b.y <= y_min: 
             logging.info("game: Ball hit top of screen")
             b.y = y_min
             b.vy *= -1
-        elif b.y > y_max: 
+        elif b.y >= y_max: 
             logging.info("game: Ball hit bottom of screen")
             b.y = y_max
             b.vy *= -1
@@ -109,11 +111,11 @@ class Game:
         if b.x < 0: # player 1 missed
             logging.info("game: Player 2 scores")
             self.paddle2.score += 1
-            self.reset_round(t)
+            self.next_round(t)
         elif b.x > t.width-1: # player 2 missed
             logging.info("game: Player 1 scores")
             self.paddle1.score += 1
-            self.reset_round(t)
+            self.next_round(t)
 
         # Now check if ball hit paddles
         for paddle in [self.paddle1, self.paddle2]:
@@ -132,6 +134,14 @@ class Game:
         logging.info("game: Resetting round")
         for object in [self.ball, self.paddle1, self.paddle2]:
             object.reset(terminal)
+
+    def next_round(self, terminal):
+        """
+        Starts the next round after a point has been scored.
+        """
+        logging.info("game: Moving to next round")
+        time.sleep(0.75)
+        self.reset_round(terminal)
 
     def game_over(self):
         # TODO
@@ -156,8 +166,8 @@ class Ball:
         """
         logging.debug("ball: Ball reset")
         self.colour = terminal.on_green
-        self.x = (terminal.width - 1)/2.0
-        self.y = (terminal.height - 1)/2.0
+        self.x = terminal.width/2.0
+        self.y = terminal.height/2.0
 
         # Choose starting direction randomly.
         # It could be either directly left or directly right
@@ -168,6 +178,10 @@ class Ball:
     def draw(self, terminal):
         logging.debug("ball: Ball draw")
         terminal.draw_square(int(self.x), int(self.y), colour=self.colour)
+    
+    def undraw(self, terminal):
+        logging.debug("ball: Ball undraw")
+        terminal.draw_square(int(self.x), int(self.y))
 
     def update(self, terminal):
         logging.debug("ball: Ball updated. x={0}, y={1}, vx={2}, vy={3}".format(self.x, self.y, self.vx, self.vy))
@@ -176,12 +190,15 @@ class Ball:
 
     def bounce_off_paddle(self, paddle):
         # Reverse the x direction
-        new_x_direction = math.copysign(1, self.vx) * -1
+        if paddle.id == "player1":
+            new_x_direction = 1
+        else: # paddle.id == "player2"
+            new_x_direction = -1
 
         # Randomize x velocity to +/- 0.5 of starting speed
         new_vx = (random.random() + 0.5) * self.init_speed
 
-        y_delta = self.y - (paddle.y + paddle.height/2.0)
+        y_delta = (self.y + 0.5) - (paddle.y + paddle.height/2.0)
 
         self.vx = new_x_direction * new_vx
         self.vy = (2 * y_delta * self.init_speed) / paddle.height
@@ -211,7 +228,7 @@ class Paddle:
 
         self.height = 5
         self.speed = 0.2
-        self.y = terminal.height / 2.0 - self.height / 2.0
+        self.y = terminal.height / 2.0 - math.floor(self.height / 2.0)
 
         if self.id == "player1":
             self.x = self.offset
@@ -227,10 +244,28 @@ class Paddle:
 
     def update(self, terminal):
         self.y += self.vy
+        self.vy = 0
 
     def collides_with_ball(self, ball):
-        if ball.y > self.y and ball.y < self.y + self.height:
-            if ball.x > self.x and ball.x < self.x + 1:
+        """
+        Returns True if the paddle is colliding with the ball, False otherwise.
+        The variables left_x, right_x, top_y, bottom_y below define a rectangle which is the hitbox of the paddle.
+        The hitbox for each paddle extends 1 square in front of it, which makes for more accurate looking collisions.
+        """
+        top_y = int(self.y)
+        bottom_y = top_y + self.height
+
+        if self.id == "player1":
+            left_x = self.x
+            right_x = self.x + 2
+        else: # self.id == "player2"
+            left_x = self.x - 1
+            right_x = self.x + 1
+
+        if (ball.y >= top_y and
+            ball.y <= bottom_y and
+            ball.x >= left_x and
+            ball.x <= right_x):
                 return True
         else:
             return False
@@ -273,7 +308,13 @@ class UserInterface:
         self.y_max = terminal.height - 1
 
     def get_y_min(self):
+        """
+        Returns the lowest y value not occupied by a UI element, thus defining the field where the ball can bounce.
+        """
         return self.y_min
 
     def get_y_max(self):
+        """
+        Returns the maximum y value not occupied by a UI element, thus defining the field where the ball can bounce.
+        """
         return self.y_max
