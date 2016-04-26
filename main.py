@@ -3,6 +3,13 @@
 import blessed
 import game
 import logging
+import os
+
+def is_running_on_pi():
+    return os.uname()[1] == "raspberrypi"
+
+if is_running_on_pi():
+    import leds
 
 # Set up logging configuration. Logs will be sent to the file 'game.log'
 logging.basicConfig(filename="game.log", filemode="w", level=logging.DEBUG)
@@ -30,10 +37,11 @@ class PongTerminal(blessed.Terminal):
         else:
             print(" ")
 
-t = PongTerminal()
-print t.enter_fullscreen
-print t.clear
+if __name__ == "__main__":
+    t = PongTerminal(force_styling=True)
+    print t.enter_fullscreen
+    print t.clear
 
-logging.info("main: Starting game")
-game = game.Game(score_needed_to_win=5)
-game.play(t)
+    logging.info("main: Starting game")
+    game = game.Game(t, score_needed_to_win=5)
+    game.play()
