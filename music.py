@@ -1,9 +1,18 @@
 import RPi.GPIO as GPIO
 import time
 import datetime
+import threading
 
 TRANSPOSE_AMOUNT = -12
 SPEED = 240.0
+SHOULD_STOP_MUSIC = False # used for message passing when in background thread
+
+# This custom exception is raised during a song if SHOULD_STOP_MUSIC is true.
+# This indicates that the song should exit prematurely.
+class StopMusicException(Exception):
+    pass
+
+theme_music_thread = None
 
 minim = 2.0 * (30000/SPEED)
 crotchet = 1.0 * (30000/SPEED)
@@ -36,7 +45,6 @@ def play_note(period=0.1, duration=500):
 
 def sleepm(millis):
 	time.sleep(millis/1000.0)
-
 
 frequencies = {
 	"C3": 130.81,
@@ -130,6 +138,9 @@ for note, freq in frequencies.iteritems():
     pitches[note] = 1.0/freq
 
 def p(note, duration):
+    if SHOULD_STOP_MUSIC:
+        raise StopMusicException()
+
     if TRANSPOSE_AMOUNT != 0:
         note = transpose(note, TRANSPOSE_AMOUNT)
 
@@ -195,46 +206,63 @@ def imperialmarch():
 	p("G4", minim)
 
 def ohwhenthesaints():
-	p("C4", quaver)
-	p("E4", quaver)
-	p("F4", quaver)
-	p("G4", minim + quaver)
+    try:
+        p("C4", quaver)
+        p("E4", quaver)
+        p("F4", quaver)
+        p("G4", minim + quaver)
 
-	p("C4", quaver)
-	p("E4", quaver)
-	p("F4", quaver)
-	p("G4", minim + quaver)
+        p("C4", quaver)
+        p("E4", quaver)
+        p("F4", quaver)
+        p("G4", minim + quaver)
 
-	p("C4", quaver)
-	p("E4", quaver)
-	p("F4", quaver)
+        p("C4", quaver)
+        p("E4", quaver)
+        p("F4", quaver)
 
-	p("G4", crotchet)
-	p("E4", crotchet)
-	p("C4", crotchet)
-	p("E4", crotchet)
-	p("D4", minim + quaver)
+        p("G4", crotchet)
+        p("E4", crotchet)
+        p("C4", crotchet)
+        p("E4", crotchet)
+        p("D4", minim + quaver)
 
-	p("D4", quaver)
-	p("E4", quaver)
-	p("D4", quaver)
+        p("D4", quaver)
+        p("E4", quaver)
+        p("D4", quaver)
 
-	p("C4", crotchet + quaver)
-	p("C4", quaver)
-	p("E4", crotchet)
-	p("G4", crotchet)
-	p("G4", quaver)
-	p("F4", minim)
-	p("F4", quaver)	
-	p("E4", quaver)
-	p("F4", quaver)
-	
-	p("G4", crotchet)
-	p("E4", crotchet)
-	p("C4", crotchet)
-	p("D4", crotchet)
+        p("C4", crotchet + quaver)
+        p("C4", quaver)
+        p("E4", crotchet)
+        p("G4", crotchet)
+        p("G4", quaver)
+        p("F4", minim)
+        p("F4", quaver)	
+        p("E4", quaver)
+        p("F4", quaver)
+        
+        p("G4", crotchet)
+        p("E4", crotchet)
+        p("C4", crotchet)
+        p("D4", crotchet)
 
-	p("C4", minim * 2)
+        p("C4", minim * 2)
+    except StopMusicException:
+        logging.debug("music: StopMusicException raised so exiting song.")
+        return
+
+def theme_music_worker():
+    # This function will be the target of a background thread
+    ohwhenthesaints()
+
+def start_theme_music():
+    global theme_music_thread
+    theme_music_thread = threading.Thread(target=theme_music_worker)
+    theme_music_thread.setDaemon(True)
+    theme_music_thread.start()
+
+def stop_theme_music():
+    SHOULD_STOP_MUSIC = True
 
 if __name__ == "__main__":
     #imperialmarch()

@@ -6,14 +6,49 @@ import threading
 import logging
 import math
 import datetime
-import main
+import config
 
-def keyboard_input_worker(terminal, queue):
-    t = terminal
+if config.is_running_on_pi():
+    import leds
+
+# We keep a global reference to the terminal object
+# This value is set when a Game is created.
+terminal = None
+
+# This function provides an interface for game objects to draw squares to the screen.
+# It allows for some optimizations - for example if the same colour square is to be drawn more than once, the colour escape code will be sent only once.
+previous_square_colour = None
+def draw_square(x, y, colour=""):
+    if terminal == None:
+        raise RuntimeError("draw_square called but terminal has not been set. Have you created a Game object yet?")
+
+    terminal.stream.write(terminal.move(int(y), int(x)))
+    
+    try:
+        terminal.stream.flush()
+    except Exception:
+        logging.error("Terminal could not flush stream!")
+
+    # Check to see if the new colour is different to the last colour.
+    # This minimizes the number of colour changes needed.
+    global previous_square_colour
+    if previous_square_colour != colour:
+        if colour == "":
+            print(terminal.normal + " ")
+        else:
+            print(colour + " ")
+
+        previous_square_colour = colour
+    else:
+        print(" ")
+
+# This function is used only when running on a PC (not on the Pi) and allows the game to be played with keyboard input.
+# It will be ran in a seperate thread when the game is started.
+def keyboard_input_worker(queue):
     while True:
-        with t.cbreak():
+        with terminal.cbreak():
             # Wait for a key to be pressed, blocking indefinitely
-            key = t.inkey(timeout=None)
+            key = terminal.inkey(timeout=None)
             logging.info("keyboard: got key: {}".format((str(key), key.name, key.code)))
             if key.name != None:
                 # Special keys e.g. left right etc. have a descriptive name like 'KEY_LEFT' # Normal keys like a,b,c don't have a key.name attribute
@@ -23,69 +58,89 @@ def keyboard_input_worker(terminal, queue):
 
 
 class Game:
-    def __init__(self, terminal, score_needed_to_win=5):
-        self.terminal = terminal
+    def __init__(self, term, score_needed_to_win=10):
+        # term is a blessed.Terminal object
+        # set the global variable terminal for ease of access
+        global terminal
+        terminal = term
         self.score_needed_to_win = score_needed_to_win
 
-        self.width = 80
-        self.height = 20
-        self.fps = 32
+        self.width = config.game_width
+        self.height = config.game_height
+        self.fps = config.game_fps
 
-        self.ball = Ball(self)
-        self.paddle1 = Paddle(self, "player1")
-        self.paddle2 = Paddle(self, "player2")
-        self.user_interface = UserInterface(self, self.paddle1, self.paddle2)
+        self.ball = Ball()
+        self.paddle1 = Paddle("player1")
+        self.paddle2 = Paddle("player2")
+        self.user_interface = UserInterface(self.ball, self.paddle1, self.paddle2)
 
         # Save a list of all game objects. This is useful for when they need to be iterated over.
         # Note the order of objects in the list also determines render order.
-        self.game_objects = [self.user_interface, self.ball, self.paddle1, self.paddle2]
+        self.game_objects = [self.ball, self.paddle1, self.paddle2, self.user_interface]
 
         self.keyboard_input_thread = None
         self.keyboard_input_queue  = None
         self.starting_next_round = False
+
+        # Keep a reference to the terminal's width and height and clear/refresh the display if it changes.
+        # This helps to prevent display errors.
+        self.prev_terminal_width = terminal.width
+        self.prev_terminal_height = terminal.height
+
 
     def init_keyboard_input_thread(self):
         # This queue is used for communication between the keyboard input thread and the main thread
         # When a key is pressed it is placed onto the queue
         # It is then popped off the queue in the main thread
         self.keyboard_input_queue = Queue.Queue(maxsize=1)
-        self.keyboard_input_thread = threading.Thread(target=keyboard_input_worker, args=(self.terminal, self.keyboard_input_queue))
+        self.keyboard_input_thread = threading.Thread(target=keyboard_input_worker, args=(self.keyboard_input_queue,))
 
         # Setting the thread to a daemon means it will end when the main thread ends
         self.keyboard_input_thread.setDaemon(True)
         self.keyboard_input_thread.start()
 
     def play(self):
-        if not main.is_running_on_pi():
+        if not config.is_running_on_pi():
             logging.debug("Initializing keyboard input thread since we're not on the Pi.")
             self.init_keyboard_input_thread()
         else:
             logging.debug("On the Pi so not using keyboard input.")
 
-        with self.terminal.hidden_cursor(): # without this the terminal cursor flashes which looks bad
+        with terminal.hidden_cursor(): # without this the terminal cursor flashes which looks bad
             self.reset_round()
 
             while True:
                 # Time the duration of the frame and adjust the sleep duration accordingly.
-                # This improves smoothness on the Pi.
+                # This improves fps accuracy on the Pi.
                 frame_start_time = datetime.datetime.now()
 
                 # Note handle_input must come before update
                 self.handle_input()
                 self.update()
-                self.redraw()
+
+                if terminal.width != self.prev_terminal_width or terminal.height != self.prev_terminal_height:
+                    logging.info("Terminal resized so clearing screen.")
+                    print terminal.normal + terminal.clear 
+                    self.prev_terminal_width = terminal.width
+                    self.prev_terminal_height = terminal.height
+                    self.draw()
+                else:
+                    self.redraw()
 
                 frame_end_time = datetime.datetime.now()
                 time_delta = (frame_end_time - frame_start_time).total_seconds()
-                time.sleep(max(0, 1/float(self.fps) - time_delta))
-                logging.debug("time delta: {0}, sleep time: {1}".format(time_delta, max(0, 1/float(self.fps) - time_delta)))
+                time_to_sleep = max(0, 1/float(self.fps) - time_delta)
+                time.sleep(time_to_sleep)
+                logging.debug("time delta: {0}, sleep time: {1}".format(time_delta, time_to_sleep))
+
                 if self.starting_next_round:
                     self.next_round()
 
-                #print self.terminal.clear
+                # The screen should not need to be cleared since every game object's redraw method should clear it's last position 
+                #print terminal.clear
 
     def handle_input(self):
-        if main.is_running_on_pi():
+        if config.is_running_on_pi():
             # TODO: Change this
             logging.debug("Running on Pi so not handling input.")
             return
@@ -105,29 +160,46 @@ class Game:
                 # TODO: pause game
                 pass
         except Queue.Empty:
+            # If no keys have been pressed the queue will be empty and this exception will be raised.
+            # It's not a problem so just continue.
             pass
 
     def draw(self):
+        """
+        The point of draw is to have each game object draw itself to the screen.
+        It is only called on the first frame of each round, or if the terminal has been resized. Aside from these special cases, redraw is always used.
+        The point of this is that redraw cares about erasing the game object's previous position, but draw does not - it simply draws the object.
+        """
         logging.info("game: Drawing")
         for object in self.game_objects:
             object.draw()
 
     def redraw(self):
+        """
+        The point of redraw is to have each game object erase it's last position and then draw it's new position.
+        This prevents the screen from having to be completely cleared every frame and thus makes the game render more smoothly.
+        """
         logging.info("game: Redrawing")
         for object in self.game_objects:
             object.redraw()
 
     def update(self):
+        """
+        Updates all the game objects and then performs collision detection.
+        """
         logging.info("game: Updating")
         for object in self.game_objects:
             object.update()
 
+        if config.is_running_on_pi():
+            leds.follow_ball(self.ball)
+
         # Perform collision detections
         # Firstly, check if ball hit walls
         b = self.ball # this is less verbose
-        t = self.terminal
-        y_min = self.user_interface.get_y_min()
-        y_max = self.user_interface.get_y_max()
+        t = terminal
+        y_min = 0
+        y_max = config.game_height - 1
 
         if b.y <= y_min: 
             logging.info("game: Ball hit top of screen")
@@ -162,7 +234,7 @@ class Game:
 
     def reset_round(self):
         logging.info("game: Resetting round")
-        print self.terminal.normal + self.terminal.clear
+        print terminal.normal + terminal.clear
         for object in self.game_objects:
             object.reset()
             object.draw()
@@ -184,18 +256,16 @@ class Game:
         pass
 
 class Ball:
-    def __init__(self, game):
-        self.game = game
-
+    def __init__(self):
         # Keep a note of the previous position to help when redrawing
         self.prev_x = None
         self.prev_y = None
         self.x = 0
         self.y = 0
-        self.vx = 0
+        self.vx = 0 # velocity in x and y directions
         self.vy = 0
-        self.init_speed = 0.5
-        self.colour = "" 
+        self.init_speed = config.ball_init_speed 
+        self.colour = terminal.on_green
 
     def reset(self):
         """
@@ -203,12 +273,11 @@ class Ball:
         Also resets its velocity.
         """
         logging.debug("ball: Ball reset")
-        self.colour = self.game.terminal.on_green
 
         self.prev_x = None
         self.prev_y = None
-        self.x = self.game.width/2.0
-        self.y = self.game.height/2.0
+        self.x = config.game_width/2.0
+        self.y = config.game_height/2.0
 
         # Choose starting direction randomly.
         # It could be either directly left or directly right
@@ -218,22 +287,25 @@ class Ball:
 
     def draw(self):
         logging.debug("ball: Ball draw")
-        self.game.terminal.draw_square(int(self.x), int(self.y), colour=self.colour)
+        draw_square(int(self.x), int(self.y), colour=self.colour)
     
     def redraw(self):
         logging.debug("ball: Ball redraw")
         # First remove the old ball
-        self.game.terminal.draw_square(int(self.prev_x), int(self.prev_y))
+        draw_square(int(self.prev_x), int(self.prev_y))
+
         # Now draw the new one
-        self.game.terminal.draw_square(int(self.x), int(self.y), colour=self.colour)
+        draw_square(int(self.x), int(self.y), colour=self.colour)
 
     def update(self):
-        logging.debug("ball: Ball updated. x={0}, y={1}, vx={2}, vy={3}".format(self.x, self.y, self.vx, self.vy))
         self.prev_x = self.x
         self.prev_y = self.y
 
         self.x += self.vx
         self.y += self.vy
+        logging.debug("ball: Ball updated. prev_x={0}, prev_y={1}, x={2}, y={3}, vx={4}, vy={5}".format(self.prev_x, self.prev_y, self.x, self.y, self.vx, self.vy))
+        if self.prev_x == config.game_width/2:
+            logging.debug("ball: Ball prev_x is 40. Maybe it hit net!?")
 
     def bounce_off_paddle(self, paddle):
         # Reverse the x direction
@@ -242,8 +314,10 @@ class Ball:
         else: # paddle.id == "player2"
             new_x_direction = -1
 
-        # Randomize x velocity to +/- 0.5 of starting speed
-        new_vx = (random.random() + 0.5) * self.init_speed
+        # Randomize x velocity
+        # The config value ball_bounce_randomness is used to determine the range of speeds the ball can attain
+        r = config.ball_bounce_randomness
+        new_vx = (1.0 - r + random.random() * 2 * r) * self.init_speed
 
         y_delta = (self.y + 0.5) - (paddle.y + paddle.height/2.0)
 
@@ -251,14 +325,13 @@ class Ball:
         self.vy = (2 * y_delta * self.init_speed) / paddle.height
 
 class Paddle:
-    def __init__(self, game, id):
+    def __init__(self, id):
         # terminal should be a Blessed-library Terminal object
         # id should be either "player1" or "player2"
         self.id = id
-        self.game = game
-        self.height = 5 # the height in terms of number of squares on the screen
-        self.offset = 1 # how far from the sides of the screen the paddle should be
-        self.speed = 0.2 # how quickly the paddle will move up or down
+        self.height = config.paddle_height
+        self.offset = config.paddle_offset 
+        self.speed = config.paddle_speed
         self.score = 0 # score in points. 1 goal = 1 point
 
         self.prev_x = None
@@ -266,25 +339,25 @@ class Paddle:
         self.y = 0 # the y position refers to the top of the paddle
         self.x = 0
         self.vy = 0.0 # velocity in the y direction
+        if self.id == "player1":
+            self.colour = terminal.on_blue
+        else:
+            self.colour = terminal.on_red
+
 
     def reset(self):
         """
         Resets the attributes of the paddle back to their defaults.
         Useful for repositioning after a goal.
         """
-        if self.id == "player1":
-            self.colour = self.game.terminal.on_blue
-        else:
-            self.colour = self.game.terminal.on_red
-
-        self.height = 5
-        self.speed = 0.2
-        self.y = self.game.height / 2.0 - math.floor(self.height / 2.0)
+        self.height = config.paddle_height 
+        self.speed = config.paddle_speed
+        self.y = config.game_height / 2.0 - math.floor(self.height / 2.0)
 
         if self.id == "player1":
             self.x = self.offset
         else: # self.id == "player2"
-            self.x = self.game.width - 1 - self.offset
+            self.x = config.game_width - 1 - self.offset
 
         self.prev_x = None
         self.prev_y = None
@@ -293,17 +366,17 @@ class Paddle:
 
     def draw(self):
         # Draw each of the paddle's squares one by one from the top down
-        for y in range(0, self.height):
-            self.game.terminal.draw_square(int(self.x), int(self.y + y), colour=self.colour)
+        for i in range(0, self.height):
+            draw_square(int(self.x), int(self.y + i), colour=self.colour)
 
     def redraw(self):
         # Only redraw if the paddle moved
         if self.prev_x != self.x or self.prev_y != self.y:
             for y in range(0, self.height):
-                self.game.terminal.draw_square(int(self.prev_x), int(self.prev_y + y))
+                draw_square(int(self.prev_x), int(self.prev_y + y))
 
             for y in range(0, self.height):
-                self.game.terminal.draw_square(int(self.x), int(self.y + y), colour=self.colour)
+                draw_square(int(self.x), int(self.y + y), colour=self.colour)
 
     def update(self):
         self.prev_x = self.x
@@ -337,71 +410,94 @@ class Paddle:
             return False
 
 class UserInterface:
-    def __init__(self, game, paddle1, paddle2):
+    def __init__(self, ball, paddle1, paddle2):
+        # Keep a reference to the ball so we can tell if it passed over the UI or not
+        self.ball = ball
+
         self.paddle1 = paddle1
         self.paddle2 = paddle2
-        self.y_min = 2 # these values are changed during update
-        self.y_max = 10
-        self.game = game
+
+        # The set of square co-ordinates making up the net
+        self.net_positions = set()
+        self.calc_net_positions()
+
+        # The set of square co-ordinates making up each player's score
+        self.p1_score_positions = set()
+        self.p2_score_positions = set()
+        self.calc_score_positions()
 
     def reset(self):
-        pass
+        self.calc_net_positions()
+        self.calc_score_positions()
+
+    def calc_net_positions(self):
+        self.net_positions = set()
+        net_x = config.game_width/2
+        for y in range(2, config.game_height):
+            if (y-2) % 4 == 0 or (y-3) % 4 == 0:
+                self.net_positions.add((net_x, y))
+
+    def calc_score_positions(self):
+        for player in [self.paddle1, self.paddle2]:
+            score_len = len(str(player.score))
+
+            if player.id == "player1":
+                score_start_x = config.game_width/2 - config.score_offset - score_len * config.score_width + (score_len - 1)
+            else:
+                score_start_x = config.game_width/2 + config.score_offset
+
+            positions = set()
+            for i, num in enumerate(str(player.score)):
+                num_x = score_start_x + i * (config.score_width + 1)
+                num_y = config.score_y
+
+                for j, val in enumerate(config.score_patterns[int(num)]):
+                    if val == 1:
+                        x = num_x + j % config.score_width 
+                        y = num_y + j / config.score_width
+                        positions.add((x,y))
+
+            if player.id == "player1":
+                self.p1_score_positions = positions
+            else:
+                self.p2_score_positions = positions
 
     def draw(self):
+        """
+        Draws the net down the middle and the scores for each player.
+        """
         logging.debug("UI: UI draw")
 
-        # Line across top
-        print self.game.terminal.normal
-        with self.game.terminal.location(0, 1):
-            print self.game.terminal.on_white + " " * self.game.width
+        # Draw net 
+        for x,y in self.net_positions:
+            draw_square(x, y, colour=terminal.on_white)
 
-        # Line down middle:
-        self.draw_centre_line()
+        # Draw scores
+        # Player 1
+        for x,y in self.p1_score_positions:
+            draw_square(x, y, colour=self.paddle1.colour)
 
-        print self.game.terminal.normal
-        # Pong text:
-        with self.game.terminal.location(self.game.width/2 - 2, 0):
-            print self.game.terminal.yellow + "PONG"
+        # Player 2
+        for x,y in self.p2_score_positions:
+            draw_square(x, y, colour=self.paddle2.colour)
 
-        # Scores
-        print self.game.terminal.normal
-        with self.game.terminal.location(0,0):
-            print self.game.terminal.blue + str(self.paddle1.score)
-
-        with self.game.terminal.location(self.game.width - 1 - len(str(self.paddle2.score)), 0):
-            print self.game.terminal.red + str(self.paddle2.score)
-
-        print self.game.terminal.normal
 
     def redraw(self):
         """
-        Just redraw the centre line incase the ball passed over it.
+        Detect if the ball passed over a square in the UI and if so then redraw it.
         """
-        logging.debug("UI: UI redraw")
-        self.draw_centre_line()
+        prev_x = int(self.ball.prev_x)
+        prev_y = int(self.ball.prev_y)
 
-    def draw_centre_line(self):
-        print self.game.terminal.normal + self.game.terminal.on_white
-        for y in range(2, self.game.height-1):
-            if y % 2 != 0:
-                # \u2502 is vertical line character
-                with self.game.terminal.location(self.game.width/2, y):
-                    #print u"\u2502"
-                    print " "
+        if (prev_x, prev_y) in self.net_positions:
+            logging.debug("Ball passed over net so redrawing the square.")
+            draw_square(prev_x, prev_y, colour=terminal.on_white)
+        elif (prev_x, prev_y) in self.p1_score_positions:
+            logging.debug("Ball passed over p1 score so redrawing the square.")
+            draw_square(prev_x, prev_y, colour=self.paddle1.colour)
+        elif (prev_x, prev_y) in self.p2_score_positions:
+            logging.debug("Ball passed over p2 score so redrawing the square.")
+            draw_square(prev_x, prev_y, colour = self.paddle2.colour)
 
     def update(self):
         logging.debug("UI: UI update")
-        self.y_min = 0
-        self.y_max = self.game.height
-
-    def get_y_min(self):
-        """
-        Returns the lowest y value not occupied by a UI element, thus defining the field where the ball can bounce.
-        """
-        return self.y_min
-
-    def get_y_max(self):
-        """
-        Returns the maximum y value not occupied by a UI element, thus defining the field where the ball can bounce.
-        """
-        return self.y_max
