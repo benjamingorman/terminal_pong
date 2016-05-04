@@ -17,6 +17,13 @@ if config.is_running_on_pi():
 # This value is set when a Game is created.
 terminal = None
 
+def print_text(text):
+    """
+    If outputting down a serial cable, the terminal's stream will be the serial port object and the text will go down the serial cable.
+    If not, the stream will be STDOUT and it will be printed to screen.
+    """
+    terminal.stream.write(text)
+
 # This function provides an interface for game objects to draw squares to the screen.
 # It allows for some optimizations - for example if the same colour square is to be drawn more than once, the colour escape code will be sent only once.
 previous_square_colour = None
@@ -24,25 +31,25 @@ def draw_square(x, y, colour=""):
     if terminal == None:
         raise RuntimeError("draw_square called but terminal has not been set. Have you created a Game object yet?")
 
-    terminal.stream.write(terminal.move(int(y), int(x)))
-    
-    try:
-        terminal.stream.flush()
-    except Exception:
-        logging.error("Terminal could not flush stream!")
+    print_text(terminal.move(int(y), int(x)))
 
     # Check to see if the new colour is different to the last colour.
     # This minimizes the number of colour changes needed.
     global previous_square_colour
     if previous_square_colour != colour:
         if colour == "":
-            print(terminal.normal + " ")
+            print_text(terminal.normal + " ")
         else:
-            print(colour + " ")
+            print_text(colour + " ")
 
         previous_square_colour = colour
     else:
-        print(" ")
+        print_text(" ")
+
+    try:
+        terminal.stream.flush()
+    except Exception:
+        logging.error("Terminal could not flush stream!")
 
 # This function is used only when running on a PC (not on the Pi) and allows the game to be played with keyboard input.
 # It will be ran in a seperate thread when the game is started.
@@ -60,21 +67,29 @@ def keyboard_input_worker(queue):
 
 
 class Game:
-    def __init__(self, term, score_needed_to_win=10):
+    def __init__(self, term):
         # term is a blessed.Terminal object
         # set the global variable terminal for ease of access
         global terminal
         terminal = term
-        self.score_needed_to_win = score_needed_to_win
 
         self.width = config.game_width
         self.height = config.game_height
         self.fps = config.game_fps
 
+        # Valid game states are:
+        # serving - between the round beginning and the player pressing serve
+        # playing - while the ball is in motion
+        # round_ending - after a player has a missed and the round is about to reset
+        # game_ending - after a player has reached the needed score to win
+        self.game_state = "serving"
+
         self.ball = Ball()
         self.paddle1 = Paddle("player1")
         self.paddle2 = Paddle("player2")
         self.user_interface = UserInterface(self.ball, self.paddle1, self.paddle2)
+
+        self.player_serving = "player1"
 
         # Save a list of all game objects. This is useful for when they need to be iterated over.
         # Note the order of objects in the list also determines render order.
@@ -82,7 +97,6 @@ class Game:
 
         self.keyboard_input_thread = None
         self.keyboard_input_queue  = None
-        self.starting_next_round = False
 
         # Keep a reference to the terminal's width and height and clear/refresh the display if it changes.
         # This helps to prevent display errors.
@@ -112,38 +126,45 @@ class Game:
         else:
             logging.debug("On the Pi so not using keyboard input.")
 
-        with terminal.hidden_cursor(): # without this the terminal cursor flashes which looks bad
-            self.reset_round()
+        self.reset_round()
 
-            while True:
-                # Time the duration of the frame and adjust the sleep duration accordingly.
-                # This improves fps accuracy on the Pi.
-                frame_start_time = datetime.datetime.now()
+        while True:
+            # Time the duration of the frame and adjust the sleep duration accordingly.
+            # This improves fps accuracy on the Pi.
+            frame_start_time = datetime.datetime.now()
 
-                # Note handle_input must come before update
-                self.handle_input()
-                self.update()
+            # Note handle_input must come before update
+            self.handle_input()
+            self.update()
 
-                if terminal.width != self.prev_terminal_width or terminal.height != self.prev_terminal_height:
-                    logging.info("Terminal resized so clearing screen.")
-                    print terminal.normal + terminal.clear 
-                    self.prev_terminal_width = terminal.width
-                    self.prev_terminal_height = terminal.height
-                    self.draw()
+            if terminal.width != self.prev_terminal_width or terminal.height != self.prev_terminal_height:
+                logging.info("Terminal resized so clearing screen.")
+                print_text(terminal.normal + terminal.clear )
+                self.prev_terminal_width = terminal.width
+                self.prev_terminal_height = terminal.height
+                self.draw()
+            else:
+                self.redraw()
+
+            frame_end_time = datetime.datetime.now()
+            time_delta = (frame_end_time - frame_start_time).total_seconds()
+            time_to_sleep = max(0, 1/float(self.fps) - time_delta)
+            time.sleep(time_to_sleep)
+            logging.debug("time delta: {0}, sleep time: {1}".format(time_delta, time_to_sleep))
+
+            if self.game_state == "round_ending":
+                if self.paddle1.score >= config.game_score_needed_to_win:
+                    self.game_over("player1")
+                    break
+                elif self.paddle2.score >= config.game_score_needed_to_win:
+                    self.game_over("player2")
+                    break
                 else:
-                    self.redraw()
-
-                frame_end_time = datetime.datetime.now()
-                time_delta = (frame_end_time - frame_start_time).total_seconds()
-                time_to_sleep = max(0, 1/float(self.fps) - time_delta)
-                time.sleep(time_to_sleep)
-                logging.debug("time delta: {0}, sleep time: {1}".format(time_delta, time_to_sleep))
-
-                if self.starting_next_round:
                     self.next_round()
 
-                # The screen should not need to be cleared since every game object's redraw method should clear it's last position 
-                #print terminal.clear
+            # The screen should not need to be cleared since every game object's redraw method should clear it's last position 
+            #print_text(terminal.clear)
+            logging.debug("-----")
 
     def handle_input(self):
         if config.is_running_on_pi():
@@ -161,16 +182,17 @@ class Game:
                 key = self.keyboard_input_queue.get_nowait()
 
                 if key == "w":
-                    self.paddle1.vy = -1 * config.paddle_max_speed
+                    self.paddle1.vy = -1
                 elif key == "s":
                     self.paddle1.vy = 1
+                elif key == "e" and self.game_state == "serving" and self.player_serving == "player1":
+                    self.serve_ball()
                 elif key == "o":
                     self.paddle2.vy = -1
                 elif key == "l":
                     self.paddle2.vy = 1
-                elif key == "p":
-                    # TODO: pause game
-                    pass
+                elif key == "p" and self.game_state == "serving" and self.player_serving == "player2":
+                    self.serve_ball()
             except Queue.Empty:
                 # If no keys have been pressed the queue will be empty and this exception will be raised.
                 # It's not a problem so just continue.
@@ -199,57 +221,85 @@ class Game:
         """
         Updates all the game objects and then performs collision detection.
         """
-        logging.info("game: Updating")
+        logging.info("game: Updating. game_state = " + self.game_state)
         for object in self.game_objects:
             object.update()
 
         if config.is_running_on_pi():
             leds.follow_ball(self.ball)
 
-        # Perform collision detections
-        # Firstly, check if ball hit walls
-        b = self.ball # this is less verbose
-        t = terminal
+        # Prevent the paddles moving off screen
         y_min = 0
         y_max = config.game_height - 1
-
-        if b.y <= y_min: 
-            logging.info("game: Ball hit top of screen")
-            b.y = y_min
-            b.vy *= -1
-        elif b.y >= y_max: 
-            logging.info("game: Ball hit bottom of screen")
-            b.y = y_max
-            b.vy *= -1
-
-        if b.x < 0: # player 1 missed
-            logging.info("game: Player 2 scores")
-            self.paddle2.score += 1
-            self.starting_next_round = True
-        elif b.x > self.width-1: # player 2 missed
-            logging.info("game: Player 1 scores")
-            self.paddle1.score += 1
-            self.starting_next_round = True
-
-        # Now check if ball hit paddles
-        for paddle in [self.paddle1, self.paddle2]:
-            if paddle.collides_with_ball(b):
-                logging.info("game: Ball hit paddle")
-                b.bounce_off_paddle(paddle)
-
-        # Prevent the paddles moving off screen
         for paddle in [self.paddle1, self.paddle2]:
             if paddle.y < y_min:
                 paddle.y = y_min
             elif paddle.y + paddle.height >= y_max:
                 paddle.y = y_max - paddle.height
 
+        if self.game_state == "serving":
+            self.ball.vx = 0.0
+            self.ball.vy = 0.0
+            self.ball.prev_x = self.ball.x
+            self.ball.prev_y = self.ball.y
+            if self.player_serving == "player1":
+                self.ball.x = float(self.paddle1.x + 1)
+                self.ball.y = float(self.paddle1.y + 1)
+            else:
+                self.ball.x = float(self.paddle2.x - 1)
+                self.ball.y = float(self.paddle2.y + 1)
+        else:
+            # Perform collision detections
+            # Firstly, check if ball hit walls
+            b = self.ball # this is less verbose
+            t = terminal
+
+            if b.y <= y_min: 
+                logging.info("game: Ball hit top of screen")
+                b.y = y_min
+                b.vy *= -1
+            elif b.y >= y_max: 
+                logging.info("game: Ball hit bottom of screen")
+                b.y = y_max
+                b.vy *= -1
+
+            if b.x < 0: # player 1 missed
+                logging.info("game: Player 2 scores")
+                self.paddle2.score += 1
+                self.game_state = "round_ending"
+            elif b.x > self.width-1: # player 2 missed
+                logging.info("game: Player 1 scores")
+                self.paddle1.score += 1
+                self.game_state = "round_ending"
+
+            # Now check if ball hit paddles
+            for paddle in [self.paddle1, self.paddle2]:
+                if paddle.collides_with_ball(b):
+                    logging.info("game: Ball hit paddle")
+                    b.bounce_off_paddle(paddle)
+
+    def serve_ball(self):
+        """
+        Serves the ball and also swaps which player is serving next.
+        """
+        logging.info("game.serve_ball called")
+        self.game_state = "playing"
+
+        if self.player_serving == "player1":
+            self.ball.vx = config.ball_init_speed
+            self.player_serving = "player2"
+        else:
+            self.ball.vx = -config.ball_init_speed
+            self.player_serving = "player2"
+
     def reset_round(self):
         logging.info("game: Resetting round")
-        print terminal.normal + terminal.clear
+        print_text(terminal.normal + terminal.clear)
         for object in self.game_objects:
             object.reset()
             object.draw()
+
+        self.game_state = "serving"
 
     def next_round(self):
         """
@@ -258,14 +308,26 @@ class Game:
         logging.info("game: Moving to next round")
         time.sleep(0.75)
         self.reset_round()
-        self.starting_next_round = False
 
-    def game_over(self):
-        # TODO
+    def game_over(self, winning_player_id):
         logging.info("game: Game over")
-        # self.keyboard_input_thread.stop()
-        print("GAME OVER!")
-        pass
+
+        game_over_text = "GAME OVER!"
+        if winning_player_id == "player1":
+            winning_text_colour = terminal.blue
+            winning_text = "Player 1 is victorious."
+        else:
+            winning_text_colour = terminal.red
+            winning_text = "Player 2 is victorious."
+
+        # Print game over text in middle of screen
+        print_text(terminal.normal + terminal.bold)
+        print_text(terminal.move_y(config.game_height/2 - 2) + terminal.move_x(config.game_width/2 - len(game_over_text)/2) + terminal.white + game_over_text)
+
+        # Print winning player text one line below it
+        print_text(terminal.move_y(config.game_height/2 - 1) + terminal.move_x(config.game_width/2 - len(winning_text)/2) + winning_text_colour + winning_text)
+
+        time.sleep(config.game_over_pause_time)
 
 class Ball:
     def __init__(self):
@@ -303,11 +365,15 @@ class Ball:
     
     def redraw(self):
         logging.debug("ball: Ball redraw")
-        # First remove the old ball
-        draw_square(int(self.prev_x), int(self.prev_y))
 
-        # Now draw the new one
-        draw_square(int(self.x), int(self.y), colour=self.colour)
+        if int(self.prev_x) == int(self.x) and int(self.prev_y) == int(self.y):
+            logging.debug("Not redrawing ball because it hasn't moved (probably cause player is serving).")
+        else:
+            # First remove the old ball
+            draw_square(int(self.prev_x), int(self.prev_y))
+
+            # Now draw the new one
+            draw_square(int(self.x), int(self.y), colour=self.colour)
 
     def update(self):
         self.prev_x = self.x
@@ -316,8 +382,6 @@ class Ball:
         self.x += self.vx
         self.y += self.vy
         logging.debug("ball: Ball updated. prev_x={0}, prev_y={1}, x={2}, y={3}, vx={4}, vy={5}".format(self.prev_x, self.prev_y, self.x, self.y, self.vx, self.vy))
-        if self.prev_x == config.game_width/2:
-            logging.debug("ball: Ball prev_x is 40. Maybe it hit net!?")
 
     def bounce_off_paddle(self, paddle):
         # Reverse the x direction
@@ -344,7 +408,7 @@ class Paddle:
         self.height = config.paddle_height
         self.offset = config.paddle_offset 
         self.speed = config.paddle_speed
-        self.score = 10 # score in points. 1 goal = 1 point
+        self.score = 9 # score in points. 1 goal = 1 point
 
         self.prev_x = None
         self.prev_y = None
@@ -409,17 +473,25 @@ class Paddle:
         if self.id == "player1":
             left_x = self.x
             right_x = self.x + 2
+
+            if (ball.y >= top_y and
+                ball.y <= bottom_y and
+                ball.x >= left_x and
+                ball.x <= right_x and
+                ball.vx < 0):
+                    return True
         else: # self.id == "player2"
             left_x = self.x - 1
             right_x = self.x + 1
 
-        if (ball.y >= top_y and
-            ball.y <= bottom_y and
-            ball.x >= left_x and
-            ball.x <= right_x):
-                return True
-        else:
-            return False
+            if (ball.y >= top_y and
+                ball.y <= bottom_y and
+                ball.x >= left_x and
+                ball.x <= right_x and
+                ball.vx > 0):
+                    return True
+
+        return False
 
 class UserInterface:
     def __init__(self, ball, paddle1, paddle2):

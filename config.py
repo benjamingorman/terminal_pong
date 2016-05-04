@@ -6,6 +6,8 @@ def is_running_on_pi():
 game_width = 80
 game_height = 20
 game_fps = 32
+game_score_needed_to_win = 10
+game_over_pause_time = 4.0
 ball_init_speed = 0.5
 ball_bounce_randomness = 0.5 # after a bounce the ball's new velocity will be +/- this value from init_speed
 paddle_height = 3 # height in terms of number of squares on the screen
@@ -16,6 +18,9 @@ paddle_speed = 0.6
 adc_max_val = 4096
 adc_min_val = 0
 adc_updates_per_sec = 5
+
+output_down_serial_cable = False
+serial_baud_rate = 19200
 
 # These patterns detail how each number in the player scores should be drawn in pixel form
 score_width = 3
