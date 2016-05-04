@@ -10,6 +10,8 @@ import config
 
 if config.is_running_on_pi():
     import leds
+    import adc_reader
+    import music
 
 # We keep a global reference to the terminal object
 # This value is set when a Game is created.
@@ -87,6 +89,10 @@ class Game:
         self.prev_terminal_width = terminal.width
         self.prev_terminal_height = terminal.height
 
+        if config.is_running_on_pi():
+            leds.setup()
+            adc_reader.setup()
+            music.start_theme_music()
 
     def init_keyboard_input_thread(self):
         # This queue is used for communication between the keyboard input thread and the main thread
@@ -141,28 +147,34 @@ class Game:
 
     def handle_input(self):
         if config.is_running_on_pi():
-            # TODO: Change this
-            logging.debug("Running on Pi so not handling input.")
-            return
+            logging.debug("Running on Pi so checking adc for player input.")
 
-        try:
-            key = self.keyboard_input_queue.get_nowait()
+            # Convert the player input to a value between -1 and 1
+            normalize_input = lambda i: ((i - config.adc_min_val)/float((config.adc_max_val - config.adc_min_val)) - 0.5) * 2.0
+            p1_normalized = normalize_input(adc_reader.get_player1_input())
+            p2_normalized = normalize_input(adc_reader.get_player2_input())
 
-            if key == "w":
-                self.paddle1.vy = -1
-            elif key == "s":
-                self.paddle1.vy = 1
-            elif key == "o":
-                self.paddle2.vy = -1
-            elif key == "l":
-                self.paddle2.vy = 1
-            elif key == "p":
-                # TODO: pause game
+            self.paddle1.vy = p1_normalized * config.paddle_speed
+            self.paddle2.vy = p2_normalized * config.paddle_speed
+        else:
+            try:
+                key = self.keyboard_input_queue.get_nowait()
+
+                if key == "w":
+                    self.paddle1.vy = -1 * config.paddle_max_speed
+                elif key == "s":
+                    self.paddle1.vy = 1
+                elif key == "o":
+                    self.paddle2.vy = -1
+                elif key == "l":
+                    self.paddle2.vy = 1
+                elif key == "p":
+                    # TODO: pause game
+                    pass
+            except Queue.Empty:
+                # If no keys have been pressed the queue will be empty and this exception will be raised.
+                # It's not a problem so just continue.
                 pass
-        except Queue.Empty:
-            # If no keys have been pressed the queue will be empty and this exception will be raised.
-            # It's not a problem so just continue.
-            pass
 
     def draw(self):
         """
@@ -332,7 +344,7 @@ class Paddle:
         self.height = config.paddle_height
         self.offset = config.paddle_offset 
         self.speed = config.paddle_speed
-        self.score = 0 # score in points. 1 goal = 1 point
+        self.score = 10 # score in points. 1 goal = 1 point
 
         self.prev_x = None
         self.prev_y = None
@@ -371,7 +383,7 @@ class Paddle:
 
     def redraw(self):
         # Only redraw if the paddle moved
-        if self.prev_x != self.x or self.prev_y != self.y:
+        if int(self.prev_x) != int(self.x) or int(self.prev_y) != int(self.y):
             for y in range(0, self.height):
                 draw_square(int(self.prev_x), int(self.prev_y + y))
 
