@@ -9,20 +9,39 @@ import datetime
 import config
 
 if config.is_running_on_pi():
-    import leds
-    import adc_reader
-    import music
+    import hardware_input
+    if config.enable_leds:
+        import leds
+    if config.enable_music:
+        import music
 
 # We keep a global reference to the terminal object
 # This value is set when a Game is created.
 terminal = None
 
-def print_text(text):
+print_text_buffer = ""
+def print_text(text, buffered=True):
     """
     If outputting down a serial cable, the terminal's stream will be the serial port object and the text will go down the serial cable.
     If not, the stream will be STDOUT and it will be printed to screen.
+    The buffered argument is True by default and will cause text to be saved up in print_text_buffer. It can then be actually printed later by calling print_text_flush_buffer, which also clears the buffer. This minimizes the number of actual stream writes needed.
     """
-    terminal.stream.write(text)
+    global print_text_buffer
+    if buffered:
+        print_text_buffer += text
+    else:
+        terminal.stream.write(text)
+
+def print_text_flush_buffer():
+    global print_text_buffer
+    terminal.stream.write(print_text_buffer)
+
+    try:
+        terminal.stream.flush()
+    except Exception:
+        logging.error("Terminal could not flush stream!")
+
+    print_text_buffer = ""
 
 # This function provides an interface for game objects to draw squares to the screen.
 # It allows for some optimizations - for example if the same colour square is to be drawn more than once, the colour escape code will be sent only once.
@@ -45,11 +64,6 @@ def draw_square(x, y, colour=""):
         previous_square_colour = colour
     else:
         print_text(" ")
-
-    try:
-        terminal.stream.flush()
-    except Exception:
-        logging.error("Terminal could not flush stream!")
 
 # This function is used only when running on a PC (not on the Pi) and allows the game to be played with keyboard input.
 # It will be ran in a seperate thread when the game is started.
@@ -104,9 +118,11 @@ class Game:
         self.prev_terminal_height = terminal.height
 
         if config.is_running_on_pi():
-            leds.setup()
-            adc_reader.setup()
-            music.start_theme_music()
+            hardware_input.setup()
+            if config.enable_leds:
+                leds.setup()
+            if config.enable_music:
+                music.start_theme_music()
 
     def init_keyboard_input_thread(self):
         # This queue is used for communication between the keyboard input thread and the main thread
@@ -170,13 +186,26 @@ class Game:
         if config.is_running_on_pi():
             logging.debug("Running on Pi so checking adc for player input.")
 
-            # Convert the player input to a value between -1 and 1
+            p1_input = hardware_input.get_player1_input()
+            p2_input = hardware_input.get_player2_input()
+
+            # Convert the player movement input to a value between -1 and 1
             normalize_input = lambda i: ((i - config.adc_min_val)/float((config.adc_max_val - config.adc_min_val)) - 0.5) * 2.0
-            p1_normalized = normalize_input(adc_reader.get_player1_input())
-            p2_normalized = normalize_input(adc_reader.get_player2_input())
+            p1_normalized = normalize_input(p1_input["movement"])
+            p2_normalized = normalize_input(p2_input["movement"])
 
             self.paddle1.vy = p1_normalized * config.paddle_speed
             self.paddle2.vy = p2_normalized * config.paddle_speed
+
+            # Now check stretch and serve input
+            if self.game_state == "serving":
+                if p1_input["serve"] == 1 or p2_input["serve"] == 1:
+                    self.serve_ball()
+            elif self.game_state == "playing":
+                if p1_input["stretch"] == 1:
+                    self.paddle1.stretch()
+                elif p2_input["stretch"] == 1:
+                    self.paddle2.stretch()
         else:
             try:
                 key = self.keyboard_input_queue.get_nowait()
@@ -187,12 +216,16 @@ class Game:
                     self.paddle1.vy = 1
                 elif key == "e" and self.game_state == "serving" and self.player_serving == "player1":
                     self.serve_ball()
-                elif key == "o":
+                elif key == "r" and self.game_state == "playing":
+                    self.paddle1.stretch()
+                elif key == "i":
                     self.paddle2.vy = -1
-                elif key == "l":
+                elif key == "k":
                     self.paddle2.vy = 1
-                elif key == "p" and self.game_state == "serving" and self.player_serving == "player2":
+                elif key == "o" and self.game_state == "serving" and self.player_serving == "player2":
                     self.serve_ball()
+                elif key == "p" and self.game_state == "playing":
+                    self.paddle2.stretch()
             except Queue.Empty:
                 # If no keys have been pressed the queue will be empty and this exception will be raised.
                 # It's not a problem so just continue.
@@ -208,6 +241,8 @@ class Game:
         for object in self.game_objects:
             object.draw()
 
+        print_text_flush_buffer()
+
     def redraw(self):
         """
         The point of redraw is to have each game object erase it's last position and then draw it's new position.
@@ -217,6 +252,8 @@ class Game:
         for object in self.game_objects:
             object.redraw()
 
+        print_text_flush_buffer()
+
     def update(self):
         """
         Updates all the game objects and then performs collision detection.
@@ -225,7 +262,7 @@ class Game:
         for object in self.game_objects:
             object.update()
 
-        if config.is_running_on_pi():
+        if config.is_running_on_pi() and config.enable_leds:
             leds.follow_ball(self.ball)
 
         # Prevent the paddles moving off screen
@@ -311,6 +348,7 @@ class Game:
 
     def game_over(self, winning_player_id):
         logging.info("game: Game over")
+        self.user_interface.redraw()
 
         game_over_text = "GAME OVER!"
         if winning_player_id == "player1":
@@ -326,6 +364,7 @@ class Game:
 
         # Print winning player text one line below it
         print_text(terminal.move_y(config.game_height/2 - 1) + terminal.move_x(config.game_width/2 - len(winning_text)/2) + winning_text_colour + winning_text)
+        print_text_flush_buffer()
 
         time.sleep(config.game_over_pause_time)
 
@@ -409,6 +448,9 @@ class Paddle:
         self.offset = config.paddle_offset 
         self.speed = config.paddle_speed
         self.score = 9 # score in points. 1 goal = 1 point
+        self.stretches_left = config.paddle_max_stretches
+        self.stretch_begin_time = None # this is set to the current time when the paddle is stretched
+        self.is_stretched = False
 
         self.prev_x = None
         self.prev_y = None
@@ -439,6 +481,7 @@ class Paddle:
         self.prev_y = None
 
         self.vy = 0
+        self.is_stretched = False
 
     def draw(self):
         # Draw each of the paddle's squares one by one from the top down
@@ -460,6 +503,29 @@ class Paddle:
 
         self.y += self.vy
         self.vy = 0
+
+        if self.is_stretched:
+            if (datetime.datetime.now() - self.stretch_begin_time).total_seconds() >= config.paddle_stretch_duration:
+                self.unstretch()
+
+    def stretch(self):
+        """
+        Stretches the paddle, extending its height by 2
+        """
+        if self.stretches_left > 0:
+            logging.info("{0} stretched their paddle".format(self.id))
+            self.is_stretched = True
+            self.stretch_begin_time = datetime.datetime.now()
+            self.stretches_left -= 1
+            self.height += 2
+            self.y -= 1
+        else:
+            logging.info("{0} tried to stretch their paddle but had no stretches left.")
+
+    def unstretch(self):
+        self.is_stretched = False
+        self.height = config.paddle_height
+        self.y += 1
 
     def collides_with_ball(self, ball):
         """

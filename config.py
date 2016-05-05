@@ -13,14 +13,24 @@ ball_bounce_randomness = 0.5 # after a bounce the ball's new velocity will be +/
 paddle_height = 3 # height in terms of number of squares on the screen
 paddle_offset = 1 # offset from the edge of the screen in squares
 paddle_speed = 0.6
+paddle_max_stretches = 2 # How many times can the player stretch the paddle per game
+paddle_stretch_duration = 15.0
 
 # The maximum and minimum numbers that can be returned by the adc
 adc_max_val = 4096
 adc_min_val = 0
 adc_updates_per_sec = 5
 
+gpio_pin_p1_stretch = 4 # pins 4 and 18 are located on the back of the adc board
+gpio_pin_p1_serve = 18 
+gpio_pin_p2_stretch = 9 # pins 9 and 11 are located on the far right of the base board, just left of pin 10
+gpio_pin_p2_serve = 11 
+
 output_down_serial_cable = False
 serial_baud_rate = 19200
+
+enable_music = True
+enable_leds = True
 
 # These patterns detail how each number in the player scores should be drawn in pixel form
 score_width = 3

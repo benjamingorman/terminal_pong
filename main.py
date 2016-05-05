@@ -22,6 +22,7 @@ terminal = blessed.Terminal(force_styling=True, stream=serialPort)
 if __name__ == "__main__":
     with terminal.fullscreen():
         with terminal.hidden_cursor(): # without this the cursor flashes which looks bad
+            import game
             terminal.stream.write(terminal.clear)
 
             logging.info("main: Starting game")
