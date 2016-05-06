@@ -21,6 +21,10 @@ adc_max_val = 4096
 adc_min_val = 0
 adc_updates_per_sec = 5
 
+adc_using_p1_ldr = False # Whether an LDR is being used for the player1 controller
+adc_ldr_max_val = 4096
+adc_ldr_min_val = 2200
+
 gpio_pin_p1_stretch = 4 # pins 4 and 18 are located on the back of the adc board
 gpio_pin_p1_serve = 18 
 gpio_pin_p2_stretch = 9 # pins 9 and 11 are located on the far right of the base board, just left of pin 10
@@ -28,10 +32,13 @@ gpio_pin_p2_serve = 11
 gpio_pin_music = 10
 
 output_down_serial_cable = False
-serial_baud_rate = 19200
+serial_baud_rate = 115200
 
 enable_music = True
 enable_leds = True
+enable_pyglow = True
+
+pyglow_default_brightness = 0
 
 # These patterns detail how each number in the player scores should be drawn in pixel form
 score_width = 3

@@ -58,7 +58,7 @@ frequencies = {
 	"B5": 987.77
 }
 
-TRANSPOSE_AMOUNT = -10
+TRANSPOSE_AMOUNT = 0
 SPEED = 90.0
 
 minim = 2.0 * (60/SPEED)
@@ -139,15 +139,13 @@ def play_song(song):
     PITCH_WORKER_SHOULD_STOP = False
 
     for note in song:
-        pitchstring = note[0]
+        pitchstring = transpose(note[0], TRANSPOSE_AMOUNT)
         duration = note[1]
 
         PITCH_WORKER_OUTPUT_PERIOD = 1.0/frequencies[pitchstring]
         time.sleep(duration*0.75) # duration is in seconds
         PITCH_WORKER_OUTPUT_PERIOD = 0.0
         time.sleep(duration*0.25)
-
-        print("sleeping for " + str(duration) + " seconds")
 
     PITCH_WORKER_SHOULD_STOP = True
 
@@ -214,6 +212,78 @@ imperialmarch = [
 	("G3", minim)
     ]
 
+rickroll = [
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("D4", quaver*1.5),
+        ("D4", quaver*1.5),
+        ("C4", crotchet*1.5),
+
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("C4", quaver*1.5),
+        ("C4", quaver*1.5),
+        ("Bb3", quaver*1.5),
+        ("A3", semiquaver),
+        ("G3", quaver),
+
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("Bb3", crotchet),
+        ("C4", quaver),
+        ("A3", quaver*1.5),
+        ("G3", semiquaver),
+        ("F3", crotchet),
+        ("F3", quaver),
+
+        ("C4", crotchet),
+        ("Bb3", minim),
+
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("D4", quaver*1.5),
+        ("D4", quaver*1.5),
+        ("C4", crotchet*1.5),
+
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("F4", crotchet),
+        ("A3", quaver),
+        ("Bb3", quaver*1.5),
+        ("A3", semiquaver),
+        ("G3", quaver),
+
+        ("F3", semiquaver),
+        ("G3", semiquaver),
+        ("Bb3", semiquaver),
+        ("G3", semiquaver),
+
+        ("Bb3", crotchet),
+        ("C4", quaver),
+        ("A3", quaver*1.5),
+        ("G3", semiquaver),
+        ("F3", crotchet),
+        ("F3", quaver),
+
+        ("C4", crotchet),
+        ("Bb3", minim)
+        ]
+
 ohwhenthesaints = [
         ("C4", quaver),
         ("E4", quaver),
@@ -259,7 +329,7 @@ ohwhenthesaints = [
 
 def start_theme_music():
     global theme_music_thread
-    theme_music_thread = threading.Thread(target=play_song, args=(imperialmarch,))
+    theme_music_thread = threading.Thread(target=play_song, args=(rickroll,))
     theme_music_thread.setDaemon(True)
     theme_music_thread.start()
 
@@ -272,4 +342,4 @@ if __name__ == "__main__":
     print("quaver: " + str(quaver))
     print("semiquaver: " + str(semiquaver))
 
-    play_song(imperialmarch)
+    play_song(rickroll)

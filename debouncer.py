@@ -1,35 +1,24 @@
 import RPi.GPIO as GPIO  
-GPIO.setmode(GPIO.BCM)  (could use GPIO.Board aswell though)
+import config
+GPIO.setmode(GPIO.BCM)
 
-# use button x
-gpio =   (pick which GPIO pin is used for button signal input)
-
+# Use Player 1 serve
+pin = config.gpio_pin_p1_serve
 
 LogicalState = 0
 
 # main loop
 while True:
-
-    # setup GPIO "gpio" as input with pull-up
-    GPIO.setup(gpio, GPIO.IN, pull_up_down=GPIO.PUD_UP)  
+    # setup pin as input with pull-up
+    GPIO.setup(pin, GPIO.IN)  
 
     # waiting for interrupt from button press
-    GPIO.wait_for_edge(gpio, GPIO.FALLING)  
+    GPIO.wait_for_edge(pin, GPIO.RISING)  
+    print("switch pressed")
+    LogicalState = 1
+    sleep(0.2)
 
-    # waiting for button release
-    while (GPIO.input(gpio) == GPIO.LOW):
-
-        # delay for debouncing-can alter delay depending on research
-        sleep(0.2)
-        
-        
-    # button released: toggle state
-    if (LogicalState == 0):
-        LogicalStatetate = 1
-        system("/home/pi/io/led0 1900 100")
-        # switch on
-    else:
-        LogicalState = 0
-        # switch off
-
-    GPIO.cleanup()
+    GPIO.wait_for_edge(pin, GPIO.FALLING)
+    print("switch released")
+    LogicalState = 0
+    sleep(0.2)

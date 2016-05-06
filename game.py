@@ -191,7 +191,12 @@ class Game:
 
             # Convert the player movement input to a value between -1 and 1
             normalize_input = lambda i: ((i - config.adc_min_val)/float((config.adc_max_val - config.adc_min_val)) - 0.5) * 2.0
-            p1_normalized = normalize_input(p1_input["movement"])
+            normalize_input_ldr = lambda i: ((i - config.adc_ldr_min_val)/float((config.adc_ldr_max_val - config.adc_ldr_min_val)) - 0.5) * 2.0
+
+            if config.adc_using_p1_ldr:
+                p1_normalized = normalize_input_ldr(p1_input["movement"])
+            else:
+                p1_normalized = normalize_input(p1_input["movement"])
             p2_normalized = normalize_input(p2_input["movement"])
 
             self.paddle1.vy = p1_normalized * config.paddle_speed
@@ -199,7 +204,7 @@ class Game:
 
             # Now check stretch and serve input
             if self.game_state == "serving":
-                if p1_input["serve"] == 1 or p2_input["serve"] == 1:
+                if p1_input["serve"] == 1 and self.player_serving == "player1" or p2_input["serve"] == 1 and self.player_serving == "player2":
                     self.serve_ball()
             elif self.game_state == "playing":
                 if p1_input["stretch"] == 1:
@@ -267,7 +272,7 @@ class Game:
 
         # Prevent the paddles moving off screen
         y_min = 0
-        y_max = config.game_height - 1
+        y_max = config.game_height
         for paddle in [self.paddle1, self.paddle2]:
             if paddle.y < y_min:
                 paddle.y = y_min
@@ -337,6 +342,8 @@ class Game:
             object.draw()
 
         self.game_state = "serving"
+        if config.is_running_on_pi() and config.enable_pyglow:
+            leds.play_pyglow_effect()
 
     def next_round(self):
         """
@@ -447,7 +454,7 @@ class Paddle:
         self.height = config.paddle_height
         self.offset = config.paddle_offset 
         self.speed = config.paddle_speed
-        self.score = 9 # score in points. 1 goal = 1 point
+        self.score = 1 # score in points. 1 goal = 1 point
         self.stretches_left = config.paddle_max_stretches
         self.stretch_begin_time = None # this is set to the current time when the paddle is stretched
         self.is_stretched = False
@@ -523,6 +530,10 @@ class Paddle:
             logging.info("{0} tried to stretch their paddle but had no stretches left.")
 
     def unstretch(self):
+        # Undraw the stretched paddle
+        for i in range(0, self.height):
+            draw_square(int(self.x), int(self.y + i))
+
         self.is_stretched = False
         self.height = config.paddle_height
         self.y += 1
