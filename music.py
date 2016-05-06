@@ -2,49 +2,7 @@ import RPi.GPIO as GPIO
 import time
 import datetime
 import threading
-
-TRANSPOSE_AMOUNT = -12
-SPEED = 240.0
-SHOULD_STOP_MUSIC = False # used for message passing when in background thread
-
-# This custom exception is raised during a song if SHOULD_STOP_MUSIC is true.
-# This indicates that the song should exit prematurely.
-class StopMusicException(Exception):
-    pass
-
-theme_music_thread = None
-
-minim = 2.0 * (30000/SPEED)
-crotchet = 1.0 * (30000/SPEED)
-quaver = 0.5 * (30000/SPEED)
-semiquaver = 0.25 * (30000/SPEED)
-
-GPIO.setwarnings(False) #disable runtime warnings
-GPIO.setmode(GPIO.BCM) #use Broadcom GPIO names
-GPIO.setup(10, GPIO.OUT) #set pin 10 as output
-
-def get_time():
-	return datetime.datetime.now()
-
-def get_time_difference_millis(t1, t2):
-	delta = t2 - t1
-	secs = delta.seconds
-	micros = delta.microseconds
-	result = 1000 * secs + micros / 1000000.0
-	return result
-
-def play_note(period=0.1, duration=500):
-	start_time  = datetime.datetime.now()
-	delay = period / 2.0
-
-	while get_time_difference_millis(start_time, get_time()) < duration:	
-		GPIO.output(10, True) #set pin 10 high
-		time.sleep(delay) #wait 1/2 sec
-		GPIO.output(10, False) #set pin 10 low
-		time.sleep(delay) #wait 1/2 sec
-
-def sleepm(millis):
-	time.sleep(millis/1000.0)
+import config
 
 frequencies = {
 	"C3": 130.81,
@@ -81,7 +39,7 @@ frequencies = {
  	"A#4": 466.16,
 	"Bb4": 466.16,
 	"B4": 493.88,
-	"C5": 423.25,
+	"C5": 523.25,
  	"C#5": 554.37,
 	"Db5": 554.37,
 	"D5": 587.33,
@@ -99,6 +57,42 @@ frequencies = {
 	"Bb5": 932.33,
 	"B5": 987.77
 }
+
+TRANSPOSE_AMOUNT = -10
+SPEED = 90.0
+
+minim = 2.0 * (60/SPEED)
+crotchet = 1.0 * (60/SPEED)
+quaver = 0.5 * (60/SPEED)
+semiquaver = 0.25 * (60/SPEED)
+
+PITCH_WORKER_OUTPUT_PERIOD = 0
+PITCH_WORKER_SHOULD_STOP = False
+def pitch_worker():
+    """
+    When play song is called, this function will be run in a thread.
+    It constantly outputs a frequency on the music output pin.
+    The global value PITCH_WORKER_OUTPUT_PERIOD can be changed to alter the pitch being output.
+    """
+    music_pin = config.gpio_pin_music
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(music_pin, GPIO.OUT, initial=0)
+
+    global PITCH_WORKER_OUTPUT_PERIOD, PITCH_WORKER_SHOULD_STOP
+    try:
+        while True:
+            if PITCH_WORKER_OUTPUT_PERIOD == 0:
+                continue
+            elif PITCH_WORKER_SHOULD_STOP:
+                break
+            else:
+                delay = PITCH_WORKER_OUTPUT_PERIOD / 2.0
+                GPIO.output(music_pin, 1)
+                time.sleep(delay)
+                GPIO.output(music_pin, 0)
+                time.sleep(delay)
+    finally:
+        GPIO.cleanup()
 
 def transpose(pitchstring, semitones):
     pitch_table = {
@@ -132,132 +126,140 @@ def transpose(pitchstring, semitones):
     new_pitchstring = reverse_pitchtable[new_index] + str(octave)
     return new_pitchstring
 
+def play_song(song):
+    """
+    A song is a series of tuples (pitchstring, duration)
+    """
+    pitch_worker_thread = threading.Thread(target=pitch_worker)
+    pitch_worker_thread.setDaemon(True)
+    pitch_worker_thread.start()
 
-pitches = {}
-for note, freq in frequencies.iteritems():
-    pitches[note] = 1.0/freq
+    global PITCH_WORKER_OUTPUT_PERIOD, PITCH_WORKER_SHOULD_STOP
+    PITCH_WORKER_OUTPUT_PERIOD = 0
+    PITCH_WORKER_SHOULD_STOP = False
 
-def p(note, duration):
-    if SHOULD_STOP_MUSIC:
-        raise StopMusicException()
+    for note in song:
+        pitchstring = note[0]
+        duration = note[1]
 
-    if TRANSPOSE_AMOUNT != 0:
-        note = transpose(note, TRANSPOSE_AMOUNT)
+        PITCH_WORKER_OUTPUT_PERIOD = 1.0/frequencies[pitchstring]
+        time.sleep(duration*0.75) # duration is in seconds
+        PITCH_WORKER_OUTPUT_PERIOD = 0.0
+        time.sleep(duration*0.25)
 
-    play, sleep = duration * 0.75, duration * 0.25
-    play_note(pitches[note], play)
-    sleepm(sleep)
+        print("sleeping for " + str(duration) + " seconds")
 
-def scale():
-	for note in ["C3", "D3", "E3", "F3", "G3", "A3", "B3", "C4"]:
-		p(note, semiquaver)
+    PITCH_WORKER_SHOULD_STOP = True
 
-def imperialmarch():
-	p("G4", crotchet)
-	p("G4", crotchet)
-	p("G4", crotchet)
-	p("Eb4", quaver * 1.5)
-	p("Bb4", semiquaver)
+scale = [
+        ("C3", quaver),
+        ("D3", quaver),
+        ("E3", quaver),
+        ("F3", quaver),
+        ("G3", quaver),
+        ("A3", quaver),
+        ("B3", quaver),
+        ("C4", quaver)
+        ]
 
-	p("G4", crotchet)
-	p("Eb4", quaver * 1.5)
-	p("Bb4", semiquaver)
-	p("G4", minim)
+imperialmarch = [
+	("G3", crotchet),
+	("G3", crotchet),
+	("G3", crotchet),
+	("Eb3", quaver * 1.5),
+	("Bb3", semiquaver),
 
-	p("D5", crotchet)
-	p("D5", crotchet)
-	p("D5", crotchet)
-	p("Eb5", quaver * 1.5)
-	p("Bb4", semiquaver)
+	("G3", crotchet),
+	("Eb3", quaver * 1.5),
+	("Bb3", semiquaver),
+	("G3", minim),
 
-	p("Gb4", crotchet)
-	p("Eb4", quaver * 1.5)
-	p("Bb4", semiquaver)
-	p("G4", minim)
+	("D4", crotchet),
+	("D4", crotchet),
+	("D4", crotchet),
+	("Eb4", quaver * 1.5),
+	("Bb3", semiquaver),
 
-	p("G5", crotchet)
-	p("G4", quaver * 1.5)
-	p("G4", semiquaver)
-	p("G5", crotchet)
-	p("Gb5", quaver * 1.5)
-	p("F5", semiquaver)
+	("Gb3", crotchet),
+	("Eb3", quaver * 1.5),
+	("Bb3", semiquaver),
+	("G3", minim),
 
-	p("E5", semiquaver)
-	p("D#5", semiquaver)
-	p("E5", quaver)
-	sleepm(quaver)
-	p("G#4", quaver)
-	p("C#5", crotchet)
-	p("C5", quaver * 1.5)
-	p("B4", semiquaver)
+	("G4", crotchet),
+	("G3", quaver * 1.5),
+	("G3", semiquaver),
+	("G4", crotchet),
+	("Gb4", quaver * 1.5),
+	("F4", semiquaver),
 
-	p("Bb4", semiquaver)
-	p("A4", semiquaver)
-	p("Bb4", quaver)
-	sleepm(quaver)
-	p("Eb4", quaver)
-	p("Gb4", crotchet)
-	p("Eb4", quaver * 1.5)
-	p("Bb4", semiquaver)
+	("E4", semiquaver),
+	("D#4", semiquaver),
+	("E4", quaver),
+	("G#3", quaver),
+	("C#4", crotchet),
+	("C4", quaver * 1.5),
+	("B3", semiquaver),
 
-	p("G4", crotchet)
-	p("Eb4", quaver * 1.5)
-	p("Bb4", semiquaver)
-	p("G4", minim)
+	("Bb3", semiquaver),
+	("A3", semiquaver),
+	("Bb3", quaver),
+	("Eb3", quaver),
+	("Gb3", crotchet),
+	("Eb3", quaver * 1.5),
+	("Bb3", semiquaver),
 
-def ohwhenthesaints():
-    try:
-        p("C4", quaver)
-        p("E4", quaver)
-        p("F4", quaver)
-        p("G4", minim + quaver)
+	("G3", crotchet),
+	("Eb3", quaver * 1.5),
+	("Bb3", semiquaver),
+	("G3", minim)
+    ]
 
-        p("C4", quaver)
-        p("E4", quaver)
-        p("F4", quaver)
-        p("G4", minim + quaver)
+ohwhenthesaints = [
+        ("C4", quaver),
+        ("E4", quaver),
+        ("F4", quaver),
+        ("G4", minim + quaver),
 
-        p("C4", quaver)
-        p("E4", quaver)
-        p("F4", quaver)
+        ("C4", quaver),
+        ("E4", quaver),
+        ("F4", quaver),
+        ("G4", minim + quaver),
 
-        p("G4", crotchet)
-        p("E4", crotchet)
-        p("C4", crotchet)
-        p("E4", crotchet)
-        p("D4", minim + quaver)
+        ("C4", quaver),
+        ("E4", quaver),
+        ("F4", quaver),
 
-        p("D4", quaver)
-        p("E4", quaver)
-        p("D4", quaver)
+        ("G4", crotchet),
+        ("E4", crotchet),
+        ("C4", crotchet),
+        ("E4", crotchet),
+        ("D4", minim + quaver),
 
-        p("C4", crotchet + quaver)
-        p("C4", quaver)
-        p("E4", crotchet)
-        p("G4", crotchet)
-        p("G4", quaver)
-        p("F4", minim)
-        p("F4", quaver)	
-        p("E4", quaver)
-        p("F4", quaver)
+        ("D4", quaver),
+        ("E4", quaver),
+        ("D4", quaver),
+
+        ("C4", crotchet + quaver),
+        ("C4", quaver),
+        ("E4", crotchet),
+        ("G4", crotchet),
+        ("G4", quaver),
+        ("F4", minim),
+        ("F4", quaver)	,
+        ("E4", quaver),
+        ("F4", quaver),
         
-        p("G4", crotchet)
-        p("E4", crotchet)
-        p("C4", crotchet)
-        p("D4", crotchet)
+        ("G4", crotchet),
+        ("E4", crotchet),
+        ("C4", crotchet),
+        ("D4", crotchet),
 
-        p("C4", minim * 2)
-    except StopMusicException:
-        logging.debug("music: StopMusicException raised so exiting song.")
-        return
-
-def theme_music_worker():
-    # This function will be the target of a background thread
-    ohwhenthesaints()
+        ("C4", minim * 2)
+        ]
 
 def start_theme_music():
     global theme_music_thread
-    theme_music_thread = threading.Thread(target=theme_music_worker)
+    theme_music_thread = threading.Thread(target=play_song, args=(imperialmarch,))
     theme_music_thread.setDaemon(True)
     theme_music_thread.start()
 
@@ -265,6 +267,9 @@ def stop_theme_music():
     SHOULD_STOP_MUSIC = True
 
 if __name__ == "__main__":
-    #imperialmarch()
-    #scale()
-    ohwhenthesaints()
+    print("minim: " + str(minim))
+    print("crotchet: " + str(crotchet))
+    print("quaver: " + str(quaver))
+    print("semiquaver: " + str(semiquaver))
+
+    play_song(imperialmarch)

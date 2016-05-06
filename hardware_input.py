@@ -109,7 +109,7 @@ def read_from_adc():
         # If there was a glitch, just assume the value read is the max value / 2 (i.e. 2048)
         return config.adc_max_val / 2
 
-def debug():
+def debug(player1=True, player2=True):
     GPIO.setmode(GPIO.BCM)
     for pin in [config.gpio_pin_p1_stretch,
                 config.gpio_pin_p1_serve,
@@ -120,24 +120,25 @@ def debug():
 
     while True:
         # First player1
-        print("player1:")
-        bus.write_byte(I2CADDR, 0x80)
-        movement_value = read_from_adc()
-        stretch_value = GPIO.input(config.gpio_pin_p1_stretch)
-        serve_value = GPIO.input(config.gpio_pin_p1_serve)
-        print("movement: {0}, stretch: {1}, serve: {2}".format(movement_value, stretch_value, serve_value))
+        if player1:
+            print("player1:")
+            bus.write_byte(I2CADDR, 0x80)
+            movement_value = read_from_adc()
+            stretch_value = GPIO.input(config.gpio_pin_p1_stretch)
+            serve_value = GPIO.input(config.gpio_pin_p1_serve)
+            print("movement: {0}, stretch: {1}, serve: {2}".format(movement_value, stretch_value, serve_value))
 
+            print("")
+            time.sleep(0.25)
 
-        print("")
-        time.sleep(0.25)
+        if player2:
+            # Now player2
+            print("player2:")
+            bus.write_byte(I2CADDR, 0x40)
+            movement_value = read_from_adc()
+            stretch_value = GPIO.input(config.gpio_pin_p2_stretch)
+            serve_value = GPIO.input(config.gpio_pin_p2_serve)
+            print("movement: {0}, stretch: {1}, serve: {2}".format(movement_value, stretch_value, serve_value))
+            print("")
 
-        # Now player2
-        print("player2:")
-        bus.write_byte(I2CADDR, 0x40)
-        movement_value = read_from_adc()
-        stretch_value = GPIO.input(config.gpio_pin_p2_stretch)
-        serve_value = GPIO.input(config.gpio_pin_p2_serve)
-        print("movement: {0}, stretch: {1}, serve: {2}".format(movement_value, stretch_value, serve_value))
-        print("")
-
-        time.sleep(0.25)
+            time.sleep(0.25)

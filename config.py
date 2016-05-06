@@ -25,6 +25,7 @@ gpio_pin_p1_stretch = 4 # pins 4 and 18 are located on the back of the adc board
 gpio_pin_p1_serve = 18 
 gpio_pin_p2_stretch = 9 # pins 9 and 11 are located on the far right of the base board, just left of pin 10
 gpio_pin_p2_serve = 11 
+gpio_pin_music = 10
 
 output_down_serial_cable = False
 serial_baud_rate = 19200
